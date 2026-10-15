@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/../config/db.php';
+session_start();
 
 function isAjaxRequest(): bool
 {
@@ -22,6 +23,18 @@ function normalizeSelectedIds(mixed $value): array
     }
 
     return array_values(array_unique($ids));
+}
+
+if ((!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true)) {
+    if (isAjaxRequest()) {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(403);
+        echo json_encode(['success' => false, 'redirect' => 'login.php']);
+        exit;
+    }
+
+    header('Location: login.php');
+    exit;
 }
 
 initializeDatabase();
@@ -103,6 +116,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: view_messages.php');
         exit;
     }
+
+    if ($action === 'toggle_read' && $id) {
+        $readState = (int) ($_POST['read_state'] ?? 0);
+        $stmt = getDb()->prepare('UPDATE contact_messages SET is_read = ? WHERE id = ?');
+        $stmt->execute([$readState, $id]);
+
+        if (isAjaxRequest()) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        header('Location: view_messages.php');
+        exit;
+    }
+
+    if ($action === 'bulk_toggle_responded' && $selectedIds !== []) {
+        $respondedState = (int) ($_POST['responded_state'] ?? 0);
+        $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
+        $stmt = getDb()->prepare('UPDATE contact_messages SET is_responded = ? WHERE id IN (' . $placeholders . ')');
+        $stmt->execute([$respondedState, ...$selectedIds]);
+
+        if (isAjaxRequest()) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => true, 'updated' => count($selectedIds)]);
+            exit;
+        }
+
+        header('Location: view_messages.php');
+        exit;
+    }
+
+    if ($action === 'toggle_responded' && $id) {
+        $respondedState = (int) ($_POST['responded_state'] ?? 0);
+        $stmt = getDb()->prepare('UPDATE contact_messages SET is_responded = ? WHERE id = ?');
+        $stmt->execute([$respondedState, $id]);
+
+        if (isAjaxRequest()) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        header('Location: view_messages.php');
+        exit;
+    }
 }
 
 $searchTerm = trim((string) ($_GET['q'] ?? ''));
@@ -129,11 +188,11 @@ if ($searchTerm !== '') {
     }
 }
 
-$sql = 'SELECT id, name, email, message, created_at, is_read FROM contact_messages';
+$sql = 'SELECT id, name, email, message, created_at, is_read, is_responded FROM contact_messages';
 if ($where !== []) {
     $sql .= ' WHERE ' . implode(' AND ', $where);
 }
-$sql .= ' ORDER BY is_read ASC, created_at DESC';
+$sql .= ' ORDER BY is_read ASC, is_responded ASC, created_at DESC';
 
 $stmt = getDb()->prepare($sql);
 $stmt->execute($params);
@@ -141,6 +200,8 @@ $messages = $stmt->fetchAll();
 
 $unreadCount = count(array_filter($messages, static fn ($message) => (int) ($message['is_read'] ?? 0) === 0));
 $readCount = count($messages) - $unreadCount;
+$respondedCount = count(array_filter($messages, static fn ($message) => (int) ($message['is_responded'] ?? 0) === 1));
+$pendingResponseCount = count($messages) - $respondedCount;
 ?>
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -156,7 +217,13 @@ $readCount = count($messages) - $unreadCount;
     <div class="container">
         <div class="page-header">
             <h1>داشبورد پیام‌ها</h1>
-            <span class="header-tag">مدیریت پیام‌های دریافتی</span>
+            <div class="header-actions">
+                <span class="header-tag">مدیریت پیام‌های دریافتی</span>
+                <form method="post" action="login.php" class="logout-form">
+                    <input type="hidden" name="logout" value="1">
+                    <button type="submit" class="btn secondary logout-btn">خروج</button>
+                </form>
+            </div>
         </div>
 
         <div class="stats-grid">
@@ -171,6 +238,10 @@ $readCount = count($messages) - $unreadCount;
             <div class="stat-card">
                 <span class="stat-label">نخوانده</span>
                 <strong class="stat-value"><?php echo $unreadCount; ?></strong>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">پاسخ داده‌شده</span>
+                <strong class="stat-value"><?php echo $respondedCount; ?></strong>
             </div>
         </div>
 
@@ -209,6 +280,8 @@ $readCount = count($messages) - $unreadCount;
                     <button type="button" class="bulk-btn delete" data-action="bulk_delete">حذف انتخاب‌شده</button>
                     <button type="button" class="bulk-btn read" data-action="bulk_toggle_read" data-read-state="1">علامت‌گذاری خوانده</button>
                     <button type="button" class="bulk-btn unread" data-action="bulk_toggle_read" data-read-state="0">علامت‌گذاری نخوانده</button>
+                    <button type="button" class="bulk-btn responded" data-action="bulk_toggle_responded" data-responded-state="1">پاسخ داده‌شده</button>
+                    <button type="button" class="bulk-btn pending" data-action="bulk_toggle_responded" data-responded-state="0">در انتظار پاسخ</button>
                 </div>
             </div>
 
@@ -229,6 +302,7 @@ $readCount = count($messages) - $unreadCount;
                     <tbody>
                         <?php foreach ($messages as $index => $message): ?>
                             <?php $isRead = (int) ($message['is_read'] ?? 0); ?>
+                            <?php $isResponded = (int) ($message['is_responded'] ?? 0); ?>
                             <tr data-id="<?php echo (int) $message['id']; ?>" class="<?php echo $isRead ? 'read-row' : 'unread-row'; ?>">
                                 <td><input type="checkbox" class="message-select checkbox" value="<?php echo (int) $message['id']; ?>" aria-label="انتخاب پیام <?php echo (int) $message['id']; ?>"></td>
                                 <td><?php echo $index + 1; ?></td>
@@ -237,13 +311,20 @@ $readCount = count($messages) - $unreadCount;
                                 <td class="message-cell"><?php echo nl2br(htmlspecialchars($message['message'])); ?></td>
                                 <td><?php echo htmlspecialchars($message['created_at']); ?></td>
                                 <td>
-                                    <span class="status-pill <?php echo $isRead ? 'read' : 'unread'; ?>">
-                                        <?php echo $isRead ? 'خوانده‌شده' : 'نخوانده'; ?>
-                                    </span>
+                                    <div class="status-stack">
+                                        <span class="status-pill <?php echo $isRead ? 'read' : 'unread'; ?>">
+                                            <?php echo $isRead ? 'خوانده‌شده' : 'نخوانده'; ?>
+                                        </span>
+                                        <span class="status-pill <?php echo $isResponded ? 'responded' : 'pending'; ?>">
+                                            <?php echo $isResponded ? 'پاسخ داده‌شده' : 'در انتظار پاسخ'; ?>
+                                        </span>
+                                    </div>
                                 </td>
                                 <td>
                                     <div class="actions">
                                         <button type="button" class="tiny-btn edit-btn" data-id="<?php echo (int) $message['id']; ?>">ویرایش</button>
+                                        <button type="button" class="tiny-btn read-btn <?php echo $isRead ? 'read' : 'unread'; ?>" data-id="<?php echo (int) $message['id']; ?>" data-read-state="<?php echo $isRead ? '0' : '1'; ?>"><?php echo $isRead ? 'بازگشت به نخوانده' : 'خوانده شد'; ?></button>
+                                        <button type="button" class="tiny-btn respond-btn <?php echo $isResponded ? 'responded' : 'pending'; ?>" data-id="<?php echo (int) $message['id']; ?>" data-responded-state="<?php echo $isResponded ? '0' : '1'; ?>"><?php echo $isResponded ? 'بازگشت به انتظار' : 'پاسخ داده شد'; ?></button>
                                         <button type="button" class="tiny-btn delete-btn" data-id="<?php echo (int) $message['id']; ?>">حذف</button>
                                     </div>
                                 </td>
@@ -333,6 +414,37 @@ $readCount = count($messages) - $unreadCount;
                 }
             };
 
+            const respondedSelected = async (respondedState) => {
+                const selected = [...document.querySelectorAll('.message-select:checked')].map((input) => input.value);
+
+                if (!selected.length) {
+                    showStatus('هیچ پیامی انتخاب نشده است.', false);
+                    return;
+                }
+
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: (() => {
+                        const params = new URLSearchParams();
+                        params.set('action', 'bulk_toggle_responded');
+                        params.set('responded_state', String(respondedState));
+                        selected.forEach((id) => params.append('selected_ids[]', id));
+                        return params;
+                    })()
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    window.location.reload();
+                } else {
+                    showStatus('تغییر وضعیت پاسخ انجام نشد.', false);
+                }
+            };
+
             const bulkDelete = async () => {
                 const selected = [...document.querySelectorAll('.message-select:checked')].map((input) => input.value);
 
@@ -372,6 +484,54 @@ $readCount = count($messages) - $unreadCount;
                     }
                     if (action === 'bulk_toggle_read') {
                         await readSelected(Number(button.dataset.readState));
+                        return;
+                    }
+                    if (action === 'bulk_toggle_responded') {
+                        await respondedSelected(Number(button.dataset.respondedState));
+                    }
+                });
+            });
+
+            document.querySelectorAll('.read-btn').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    const id = button.dataset.id;
+                    const readState = Number(button.dataset.readState);
+                    const response = await fetch(window.location.href, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        body: new URLSearchParams({ action: 'toggle_read', id, read_state: String(readState) })
+                    });
+
+                    const result = await response.json();
+                    if (result.success) {
+                        window.location.reload();
+                    } else {
+                        showStatus('تغییر وضعیت خوانده‌شده انجام نشد.', false);
+                    }
+                });
+            });
+
+            document.querySelectorAll('.respond-btn').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    const id = button.dataset.id;
+                    const respondedState = Number(button.dataset.respondedState);
+                    const response = await fetch(window.location.href, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        body: new URLSearchParams({ action: 'toggle_responded', id, responded_state: String(respondedState) })
+                    });
+
+                    const result = await response.json();
+                    if (result.success) {
+                        window.location.reload();
+                    } else {
+                        showStatus('تغییر وضعیت پاسخ انجام نشد.', false);
                     }
                 });
             });

@@ -55,6 +55,14 @@ function initializeDatabase(): void
         // Column already exists or cannot be added.
     }
 
+    try {
+        $databaseConnection->exec(
+            'ALTER TABLE contact_messages ADD COLUMN is_responded TINYINT(1) NOT NULL DEFAULT 0'
+        );
+    } catch (PDOException $e) {
+        // Column already exists or cannot be added.
+    }
+
     $databaseConnection->exec(
         'DELETE t1 FROM contact_messages t1
         INNER JOIN contact_messages t2
