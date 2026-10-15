@@ -2,17 +2,19 @@
 
 declare(strict_types=1);
 
-const DB_HOST = 'localhost';
-const DB_NAME = 'test_project_db';
-const DB_USER = 'khodepasha';
-const DB_PASS = 'AmirK!2768';
+$host = getenv('DB_HOST') ?: 'localhost';
+$dbName = getenv('DB_NAME') ?: 'test_project_db';
+$dbUser = getenv('DB_USER') ?: 'root';
+$dbPass = getenv('DB_PASS') ?: '';
 
 function initializeDatabase(): void
 {
+    global $host, $dbName, $dbUser, $dbPass;
+
     $rootConnection = new PDO(
-        'mysql:host=' . DB_HOST . ';charset=utf8mb4',
-        DB_USER,
-        DB_PASS,
+        'mysql:host=' . $host . ';charset=utf8mb4',
+        $dbUser,
+        $dbPass,
         [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -20,13 +22,13 @@ function initializeDatabase(): void
     );
 
     $rootConnection->exec(
-        'CREATE DATABASE IF NOT EXISTS ' . DB_NAME . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+        'CREATE DATABASE IF NOT EXISTS ' . $dbName . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
     );
 
     $databaseConnection = new PDO(
-        'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4',
-        DB_USER,
-        DB_PASS,
+        'mysql:host=' . $host . ';dbname=' . $dbName . ';charset=utf8mb4',
+        $dbUser,
+        $dbPass,
         [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -73,15 +75,17 @@ function initializeDatabase(): void
 
 function getDb(): PDO
 {
+    global $host, $dbName, $dbUser, $dbPass;
+
     static $pdo = null;
 
     if ($pdo === null) {
         initializeDatabase();
 
         $pdo = new PDO(
-            'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4',
-            DB_USER,
-            DB_PASS,
+            'mysql:host=' . $host . ';dbname=' . $dbName . ';charset=utf8mb4',
+            $dbUser,
+            $dbPass,
             [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
