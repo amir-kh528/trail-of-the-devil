@@ -13,13 +13,13 @@ A small PHP project for a modern business landing page with a contact form and a
 ## Project structure
 
 - `index.php` — main landing page and contact form
-- `view_messages.php` — admin panel for managing incoming messages
+- `admin/view_messages.php` — admin panel for managing incoming messages
 - `config/db.php` — database connection and table initialization
 - `setup_db.php` — database setup script
-- `style.css` — landing page styles
-- `admin.css` — admin dashboard styles
-- `script.js` — frontend interactions
-- `fonts/` — custom fonts for Persian typography
+- `assets/css/style.css` — landing page styles
+- `assets/css/admin.css` — admin dashboard styles
+- `assets/js/script.js` — frontend interactions
+- `assets/fonts/` — custom fonts and Persian typography assets
 
 ## Tech stack
 
@@ -38,7 +38,7 @@ A small PHP project for a modern business landing page with a contact form and a
 4. For the first run, open the setup script:
    - `http://localhost/test%20project/setup_db.php`
 5. Then open the admin panel:
-   - `http://localhost/test%20project/view_messages.php`
+   - `http://localhost/test%20project/admin/view_messages.php`
 
 ## Notes
 
