@@ -62,7 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <a href="#services">خدمات</a>
                 <a href="#contact">تماس</a>
             </div>
-            <button class="nav-button">شروع پروژه</button>
+            <a href="start-project.php" class="nav-button">شروع پروژه</a>
         </nav>
     </header>
 
