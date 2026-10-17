@@ -1,0 +1,24 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+*.log
+*.tmp
+*.temp
+*.cache
+
+# Local database exports and backups
+*.sql
+!database/migrations/*.sql
+*.dump
+*.bak
+*.backup
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

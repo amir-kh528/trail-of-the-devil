@@ -1,6 +1,10 @@
 <?php
-require __DIR__ . '/config/db.php';
 
-initializeDatabase();
+declare(strict_types=1);
 
-echo "دیتابیس و جدول پیام‌ها با موفقیت آماده شدند.\n";
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+require __DIR__ . '/database/migrate.php';

@@ -484,6 +484,12 @@ tbody tr.read-row {
   color: var(--text);
 }
 
+.request-meta {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-top: 4px;
+}
+
 .status-stack {
   display: flex;
   flex-direction: column;
@@ -563,7 +569,7 @@ tbody tr.read-row {
 
 .edit-form-inner {
   display: grid;
-  grid-template-columns: 1fr 1fr 2fr auto;
+  grid-template-columns: repeat(3, minmax(140px, 1fr)) minmax(240px, 2fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -604,4 +610,35 @@ tbody tr.read-row {
   background: linear-gradient(180deg, #f8fafc, #eef2f7);
   color: var(--text);
   border-color: rgba(148, 163, 184, 0.15);
+}
+
+@media (max-width: 900px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .edit-form-inner {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  body {
+    padding: 16px 10px;
+  }
+
+  .container {
+    padding: 18px 12px 22px;
+    border-radius: 16px;
+  }
+
+  .stats-grid,
+  .edit-form-inner {
+    grid-template-columns: 1fr;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
 }

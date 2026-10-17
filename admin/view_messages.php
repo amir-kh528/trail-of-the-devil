@@ -1,6 +1,7 @@
 <?php
 require __DIR__ . '/../config/db.php';
-session_start();
+require __DIR__ . '/../config/security.php';
+require __DIR__ . '/../config/validation.php';
 
 function isAjaxRequest(): bool
 {
@@ -25,19 +26,25 @@ function normalizeSelectedIds(mixed $value): array
     return array_values(array_unique($ids));
 }
 
-if ((!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true)) {
-    if (isAjaxRequest()) {
-        header('Content-Type: application/json; charset=utf-8');
-        http_response_code(403);
-        echo json_encode(['success' => false, 'redirect' => 'login.php']);
-        exit;
-    }
-
-    header('Location: login.php');
-    exit;
+function normalizeBinaryState(mixed $value): ?int
+{
+    $state = filter_var($value, FILTER_VALIDATE_INT);
+    return in_array($state, [0, 1], true) ? $state : null;
 }
 
-initializeDatabase();
+requireAdmin();
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST'
+    && !isValidCsrfToken($_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
+    http_response_code(403);
+    if (isAjaxRequest()) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'message' => 'درخواست معتبر نیست.']);
+    } else {
+        echo 'درخواست معتبر نیست.';
+    }
+    exit;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
@@ -59,15 +66,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'update' && $id) {
-        $name = trim((string) ($_POST['name'] ?? ''));
-        $email = trim((string) ($_POST['email'] ?? ''));
-        $message = trim((string) ($_POST['message'] ?? ''));
+        $validation = validateProjectRequest($_POST, false, false);
 
-        if ($name !== '' && $email !== '' && $message !== '') {
+        if ($validation['valid']) {
+            $data = $validation['data'];
             $stmt = getDb()->prepare(
-                'UPDATE contact_messages SET name = ?, email = ?, message = ? WHERE id = ?'
+                'UPDATE contact_messages SET subject = ?, name = ?, email = ?, message = ? WHERE id = ?'
             );
-            $stmt->execute([$name, $email, $message, $id]);
+            $stmt->execute([$data['subject'], $data['name'], $data['email'], $data['message'], $id]);
 
             if (isAjaxRequest()) {
                 header('Content-Type: application/json; charset=utf-8');
@@ -81,9 +87,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (isAjaxRequest()) {
             header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['success' => false, 'message' => 'تمام فیلدها باید پر شوند.']);
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => reset($validation['errors'])], JSON_UNESCAPED_UNICODE);
             exit;
         }
+
+        http_response_code(422);
     }
 
     if ($action === 'bulk_delete' && $selectedIds !== []) {
@@ -102,7 +111,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'bulk_toggle_read' && $selectedIds !== []) {
-        $readState = (int) ($_POST['read_state'] ?? 0);
+        $readState = normalizeBinaryState($_POST['read_state'] ?? null);
+        if ($readState === null) {
+            http_response_code(422);
+            exit;
+        }
         $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
         $stmt = getDb()->prepare('UPDATE contact_messages SET is_read = ? WHERE id IN (' . $placeholders . ')');
         $stmt->execute([$readState, ...$selectedIds]);
@@ -118,7 +131,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'toggle_read' && $id) {
-        $readState = (int) ($_POST['read_state'] ?? 0);
+        $readState = normalizeBinaryState($_POST['read_state'] ?? null);
+        if ($readState === null) {
+            http_response_code(422);
+            exit;
+        }
         $stmt = getDb()->prepare('UPDATE contact_messages SET is_read = ? WHERE id = ?');
         $stmt->execute([$readState, $id]);
 
@@ -133,7 +150,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'bulk_toggle_responded' && $selectedIds !== []) {
-        $respondedState = (int) ($_POST['responded_state'] ?? 0);
+        $respondedState = normalizeBinaryState($_POST['responded_state'] ?? null);
+        if ($respondedState === null) {
+            http_response_code(422);
+            exit;
+        }
         $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
         $stmt = getDb()->prepare('UPDATE contact_messages SET is_responded = ? WHERE id IN (' . $placeholders . ')');
         $stmt->execute([$respondedState, ...$selectedIds]);
@@ -149,7 +170,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'toggle_responded' && $id) {
-        $respondedState = (int) ($_POST['responded_state'] ?? 0);
+        $respondedState = normalizeBinaryState($_POST['responded_state'] ?? null);
+        if ($respondedState === null) {
+            http_response_code(422);
+            exit;
+        }
         $stmt = getDb()->prepare('UPDATE contact_messages SET is_responded = ? WHERE id = ?');
         $stmt->execute([$respondedState, $id]);
 
@@ -181,14 +206,15 @@ if ($searchTerm !== '') {
         $where[] = 'email LIKE ?';
         $params[] = '%' . $searchTerm . '%';
     } else {
-        $where[] = '(name LIKE ? OR email LIKE ? OR message LIKE ?)';
+        $where[] = '(subject LIKE ? OR name LIKE ? OR email LIKE ? OR message LIKE ?)';
+        $params[] = '%' . $searchTerm . '%';
         $params[] = '%' . $searchTerm . '%';
         $params[] = '%' . $searchTerm . '%';
         $params[] = '%' . $searchTerm . '%';
     }
 }
 
-$sql = 'SELECT id, name, email, message, created_at, is_read, is_responded FROM contact_messages';
+$sql = 'SELECT id, subject, name, email, message, request_type, design_style, created_at, is_read, is_responded FROM contact_messages';
 if ($where !== []) {
     $sql .= ' WHERE ' . implode(' AND ', $where);
 }
@@ -209,6 +235,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="csrf-token" content="<?php echo escapeHtml(csrfToken()); ?>">
+    <meta name="csrf-token" content="<?php echo escapeHtml(csrfToken()); ?>">
     <title>داشبورد پیام‌ها</title>
     <link rel="stylesheet" href="../assets/fonts/fonts.css">
     <link rel="stylesheet" href="../assets/css/admin.css">
@@ -221,6 +249,7 @@ $pendingResponseCount = count($messages) - $respondedCount;
                 <span class="header-tag">مدیریت پیام‌های دریافتی</span>
                 <form method="post" action="login.php" class="logout-form">
                     <input type="hidden" name="logout" value="1">
+                    <input type="hidden" name="csrf_token" value="<?php echo escapeHtml(csrfToken()); ?>">
                     <button type="submit" class="btn secondary logout-btn">خروج</button>
                 </form>
             </div>
@@ -252,7 +281,7 @@ $pendingResponseCount = count($messages) - $respondedCount;
                 <input
                     type="search"
                     name="q"
-                    value="<?php echo htmlspecialchars($searchTerm); ?>"
+                    value="<?php echo escapeHtml($searchTerm); ?>"
                     placeholder="جست‌وجو در پیام‌ها..."
                     aria-label="جست‌وجو در پیام‌ها"
                 >
@@ -293,6 +322,7 @@ $pendingResponseCount = count($messages) - $respondedCount;
                             <th class="index-col">ردیف</th>
                             <th>نام</th>
                             <th>ایمیل</th>
+                            <th>موضوع / نوع درخواست</th>
                             <th>پیام</th>
                             <th>تاریخ</th>
                             <th class="status-col">وضعیت</th>
@@ -306,10 +336,23 @@ $pendingResponseCount = count($messages) - $respondedCount;
                             <tr data-id="<?php echo (int) $message['id']; ?>" class="<?php echo $isRead ? 'read-row' : 'unread-row'; ?>">
                                 <td><input type="checkbox" class="message-select checkbox" value="<?php echo (int) $message['id']; ?>" aria-label="انتخاب پیام <?php echo (int) $message['id']; ?>"></td>
                                 <td><?php echo $index + 1; ?></td>
-                                <td><?php echo htmlspecialchars($message['name']); ?></td>
-                                <td><?php echo htmlspecialchars($message['email']); ?></td>
-                                <td class="message-cell"><?php echo nl2br(htmlspecialchars($message['message'])); ?></td>
-                                <td><?php echo htmlspecialchars($message['created_at']); ?></td>
+                                <td><?php echo escapeHtml($message['name']); ?></td>
+                                <td><?php echo escapeHtml($message['email']); ?></td>
+                                <td>
+                                    <strong><?php echo escapeHtml($message['subject'] ?? ''); ?></strong>
+                                    <div class="request-meta">
+                                        <?php echo ($message['request_type'] ?? 'contact') === 'design' ? 'درخواست طراحی' : 'درخواست متنی'; ?>
+                                        <?php
+                                        $styleLabels = ['minimal' => 'مینیمال', 'modern' => 'مدرن', 'formal' => 'رسمی', 'custom' => 'سفارشی'];
+                                        $designStyle = (string) ($message['design_style'] ?? '');
+                                        if ($designStyle !== ''):
+                                        ?>
+                                            · <?php echo escapeHtml($styleLabels[$designStyle] ?? 'سفارشی'); ?>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                                <td class="message-cell"><?php echo nl2br(escapeHtml($message['message'])); ?></td>
+                                <td><?php echo escapeHtml((string) $message['created_at']); ?></td>
                                 <td>
                                     <div class="status-stack">
                                         <span class="status-pill <?php echo $isRead ? 'read' : 'unread'; ?>">
@@ -330,11 +373,13 @@ $pendingResponseCount = count($messages) - $respondedCount;
                                 </td>
                             </tr>
                             <tr class="edit-form-row" data-id="<?php echo (int) $message['id']; ?>" hidden>
-                                <td colspan="8">
+                                <td colspan="9">
                                     <form class="edit-form-inner" data-id="<?php echo (int) $message['id']; ?>">
-                                        <input type="text" name="name" value="<?php echo htmlspecialchars($message['name']); ?>" aria-label="نام">
-                                        <input type="email" name="email" value="<?php echo htmlspecialchars($message['email']); ?>" aria-label="ایمیل">
-                                        <textarea name="message" rows="3" aria-label="پیام"><?php echo htmlspecialchars($message['message']); ?></textarea>
+                                        <input type="hidden" name="csrf_token" value="<?php echo escapeHtml(csrfToken()); ?>">
+                                        <input type="text" name="subject" maxlength="180" value="<?php echo escapeHtml($message['subject'] ?? ''); ?>" aria-label="موضوع">
+                                        <input type="text" name="name" maxlength="100" value="<?php echo escapeHtml($message['name']); ?>" aria-label="نام">
+                                        <input type="email" name="email" maxlength="254" value="<?php echo escapeHtml($message['email']); ?>" aria-label="ایمیل">
+                                        <textarea name="message" rows="3" maxlength="5000" aria-label="پیام"><?php echo escapeHtml($message['message']); ?></textarea>
                                         <div class="actions">
                                             <button type="submit" class="save-btn">ذخیره</button>
                                             <button type="button" class="cancel-btn">انصراف</button>
@@ -352,6 +397,7 @@ $pendingResponseCount = count($messages) - $respondedCount;
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const statusBox = document.getElementById('adminStatus');
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
             const selectAllCheckboxes = [
                 document.getElementById('select-all'),
                 document.getElementById('select-all-header')
@@ -395,7 +441,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                        'X-Requested-With': 'XMLHttpRequest'
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-Token': csrfToken
                     },
                     body: (() => {
                         const params = new URLSearchParams();
@@ -426,7 +473,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                        'X-Requested-With': 'XMLHttpRequest'
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-Token': csrfToken
                     },
                     body: (() => {
                         const params = new URLSearchParams();
@@ -457,7 +505,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                        'X-Requested-With': 'XMLHttpRequest'
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-Token': csrfToken
                     },
                     body: (() => {
                         const params = new URLSearchParams();
@@ -500,7 +549,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                            'X-Requested-With': 'XMLHttpRequest'
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-Token': csrfToken
                         },
                         body: new URLSearchParams({ action: 'toggle_read', id, read_state: String(readState) })
                     });
@@ -522,7 +572,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                            'X-Requested-With': 'XMLHttpRequest'
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-Token': csrfToken
                         },
                         body: new URLSearchParams({ action: 'toggle_responded', id, responded_state: String(respondedState) })
                     });
@@ -543,7 +594,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                            'X-Requested-With': 'XMLHttpRequest'
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-Token': csrfToken
                         },
                         body: new URLSearchParams({ action: 'delete', id })
                     });
@@ -599,7 +651,8 @@ $pendingResponseCount = count($messages) - $respondedCount;
                     const response = await fetch(window.location.href, {
                         method: 'POST',
                         headers: {
-                            'X-Requested-With': 'XMLHttpRequest'
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-Token': csrfToken
                         },
                         body: formData
                     });
@@ -611,10 +664,12 @@ $pendingResponseCount = count($messages) - $respondedCount;
                         if (row) {
                             const nameInput = form.querySelector('input[name="name"]');
                             const emailInput = form.querySelector('input[name="email"]');
+                            const subjectInput = form.querySelector('input[name="subject"]');
                             const messageInput = form.querySelector('textarea[name="message"]');
                             row.children[2].textContent = nameInput.value;
                             row.children[3].textContent = emailInput.value;
-                            row.children[4].innerHTML = messageInput.value.replace(/\n/g, '<br>');
+                            row.children[4].querySelector('strong').textContent = subjectInput.value;
+                            row.children[5].textContent = messageInput.value;
                         }
 
                         const editorRow = form.closest('.edit-form-row');

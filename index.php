@@ -1,5 +1,11 @@
 <?php
 require __DIR__ . '/config/db.php';
+require __DIR__ . '/config/security.php';
+require __DIR__ . '/config/requests.php';
+
+startAppSession();
+$contactSuccessMessage = (string) ($_SESSION['contact_success'] ?? '');
+unset($_SESSION['contact_success']);
 
 function isAjaxRequest(): bool
 {
@@ -7,40 +13,32 @@ function isAjaxRequest(): bool
         && strtolower((string) $_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
 }
 
-initializeDatabase();
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = trim((string) ($_POST['name'] ?? ''));
-    $email = trim((string) ($_POST['email'] ?? ''));
-    $message = trim((string) ($_POST['message'] ?? ''));
-
-    if ($name !== '' && $email !== '' && $message !== '') {
-        try {
-            $stmt = getDb()->prepare(
-                'INSERT INTO contact_messages (name, email, message) VALUES (?, ?, ?)'
-            );
-            $stmt->execute([$name, $email, $message]);
-
-            if (isAjaxRequest()) {
-                header('Content-Type: application/json; charset=utf-8');
-                echo json_encode(['success' => true, 'message' => 'پیام شما با موفقیت ثبت شد.']);
-                exit;
-            }
-
-            header('Location: ' . $_SERVER['PHP_SELF']);
-            exit;
-        } catch (PDOException $e) {
-            $errorMessage = 'در ثبت اطلاعات مشکلی پیش آمد: ' . $e->getMessage();
-        }
+    if (!isValidCsrfToken($_POST['csrf_token'] ?? null)) {
+        $requestResult = [
+            'success' => false,
+            'status' => 403,
+            'message' => 'درخواست معتبر نیست. صفحه را تازه‌سازی و دوباره تلاش کنید.',
+        ];
     } else {
-        $errorMessage = 'لطفاً نام، ایمیل و پیام را کامل وارد کنید.';
+        $requestResult = saveProjectRequest($_POST);
     }
 
     if (isAjaxRequest()) {
+        http_response_code($requestResult['status']);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['success' => false, 'message' => $errorMessage]);
+        echo json_encode($requestResult, JSON_UNESCAPED_UNICODE);
         exit;
     }
+
+    if ($requestResult['success']) {
+        $_SESSION['contact_success'] = $requestResult['message'];
+        header('Location: ' . $_SERVER['PHP_SELF'] . '#contact', true, 303);
+        exit;
+    }
+
+    http_response_code($requestResult['status']);
+    $errorMessage = $requestResult['message'];
 }
 ?>
 <!DOCTYPE html>
@@ -162,25 +160,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="contact-info">
                 <p>ارتباط با ما</p>
                 <h2>درخواست پروژه‌تان را ثبت کنید</h2>
-                <p>برای مشاوره و سفارش پروژه، فرم را پر کنید تا در سریع‌ترین زمان با شما تماس بگیریم.</p>
+                <p>برای شروع پروژه، موضوع و توضیحات درخواست را ثبت کنید تا در سریع‌ترین زمان با شما تماس بگیریم.</p>
             </div>
 
             <form id="contactForm" class="contact-form" method="post" novalidate>
                 <div id="formStatus" class="status-message" aria-live="polite" hidden></div>
+                <?php if ($contactSuccessMessage !== ''): ?>
+                    <div class="status-message success-message visible" role="status"><?php echo escapeHtml($contactSuccessMessage); ?></div>
+                <?php endif; ?>
+                <?php if (!empty($errorMessage)): ?>
+                    <div class="status-message error-message visible" role="alert"><?php echo escapeHtml($errorMessage); ?></div>
+                <?php endif; ?>
+                <input type="hidden" name="csrf_token" value="<?php echo escapeHtml(csrfToken()); ?>">
+                <input type="hidden" name="request_type" value="contact">
+
+                <div class="form-group">
+                    <label for="subject">موضوع درخواست</label>
+                    <input type="text" id="subject" name="subject" maxlength="180" placeholder="برای مثال: طراحی سایت فروشگاهی" required>
+                </div>
 
                 <div class="form-group">
                     <label for="name">نام شما</label>
-                    <input type="text" id="name" name="name" placeholder="نام کامل" required>
+                    <input type="text" id="name" name="name" maxlength="100" placeholder="نام کامل" required>
                 </div>
 
                 <div class="form-group">
                     <label for="email">ایمیل</label>
-                    <input type="email" id="email" name="email" placeholder="you@example.com" required>
+                    <input type="email" id="email" name="email" maxlength="254" placeholder="you@example.com" required>
                 </div>
 
                 <div class="form-group">
                     <label for="message">پیام شما</label>
-                    <textarea id="message" name="message" rows="5" placeholder="توضیحات پروژه خود را بنویسید" required></textarea>
+                    <textarea id="message" name="message" rows="5" maxlength="5000" placeholder="توضیحات پروژه خود را بنویسید" required></textarea>
                 </div>
 
                 <button type="submit" class="submit-btn">ارسال پیام</button>
